@@ -23,6 +23,7 @@
 #include "Optimizer.h"
 #include "Converter.h"
 #include "GeometricTools.h"
+#include "DatasetCollector.h"
 
 #include<mutex>
 #include<chrono>
@@ -49,6 +50,11 @@ LocalMapping::LocalMapping(System* pSys, Atlas *pAtlas, const float bMonocular, 
     nLBA_abort = 0;
 #endif
 
+    // Initialize DatasetCollector for RGB-D dataset collection
+    if (!mbMonocular) {
+        DatasetCollector::GetInstance().Initialize("./dataset_output", true);
+        std::cout << "[LocalMapping] DatasetCollector initialized for RGB-D mode" << std::endl;
+    }
 }
 
 void LocalMapping::SetLoopCloser(LoopClosing* pLoopCloser)
@@ -125,6 +131,46 @@ void LocalMapping::Run()
             {
                 if(mpAtlas->KeyFramesInMap()>2)
                 {
+                    // Collect local map points for dataset collection (RGB-D only)
+                    std::vector<MapPoint*> vpLocalMapPoints;
+                    KeyFrame* pLastKF = nullptr;
+                    if (!mbMonocular) {
+                        // Get local keyframes (similar to LocalBundleAdjustment)
+                        const vector<KeyFrame*> vNeighKFs = mpCurrentKeyFrame->GetVectorCovisibleKeyFrames();
+                        set<MapPoint*> sLocalMapPoints;
+
+                        // Add map points from current keyframe
+                        vector<MapPoint*> vpMPs = mpCurrentKeyFrame->GetMapPointMatches();
+                        for(auto pMP : vpMPs) {
+                            if(pMP && !pMP->isBad()) {
+                                sLocalMapPoints.insert(pMP);
+                            }
+                        }
+
+                        // Add map points from neighbor keyframes
+                        for(auto pKFi : vNeighKFs) {
+                            if(!pKFi->isBad()) {
+                                vector<MapPoint*> vpMPs_i = pKFi->GetMapPointMatches();
+                                for(auto pMP : vpMPs_i) {
+                                    if(pMP && !pMP->isBad()) {
+                                        sLocalMapPoints.insert(pMP);
+                                    }
+                                }
+                                if (!pLastKF) pLastKF = pKFi; // Use first neighbor as "last" keyframe
+                            }
+                        }
+
+                        vpLocalMapPoints.assign(sLocalMapPoints.begin(), sLocalMapPoints.end());
+
+                        // Set camera parameters if not set
+                        DatasetCollector::GetInstance().SetCameraParameters(
+                            mpCurrentKeyFrame->fx, mpCurrentKeyFrame->fy,
+                            mpCurrentKeyFrame->cx, mpCurrentKeyFrame->cy
+                        );
+
+                        // Collect pre-BA data
+                        DatasetCollector::GetInstance().CollectPreBAData(mpCurrentKeyFrame, pLastKF, vpLocalMapPoints);
+                    }
 
                     if(mbInertial && mpCurrentKeyFrame->GetMap()->isImuInitialized())
                     {
@@ -153,6 +199,11 @@ void LocalMapping::Run()
                     {
                         Optimizer::LocalBundleAdjustment(mpCurrentKeyFrame,&mbAbortBA, mpCurrentKeyFrame->GetMap(),num_FixedKF_BA,num_OptKF_BA,num_MPs_BA,num_edges_BA);
                         b_doneLBA = true;
+                    }
+
+                    // Collect post-BA data (RGB-D only)
+                    if (!mbMonocular && b_doneLBA && !mbAbortBA) {
+                        DatasetCollector::GetInstance().CollectPostBAData(mpCurrentKeyFrame, vpLocalMapPoints);
                     }
 
                 }
@@ -1159,9 +1210,15 @@ bool LocalMapping::CheckFinish()
 void LocalMapping::SetFinish()
 {
     unique_lock<mutex> lock(mMutexFinish);
-    mbFinished = true;    
+    mbFinished = true;
     unique_lock<mutex> lock2(mMutexStop);
     mbStopped = true;
+
+    // Finalize dataset collection
+    if (!mbMonocular) {
+        DatasetCollector::GetInstance().Finalize();
+        std::cout << "[LocalMapping] DatasetCollector finalized" << std::endl;
+    }
 }
 
 bool LocalMapping::isFinished()

@@ -91,3 +91,6 @@ my_settings.txt
 borrar/*
 
 */ExecMean.txt
+
+# Dataset outputs
+realsense_dataset_output/

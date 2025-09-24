@@ -92,6 +92,10 @@ KeyFrame::KeyFrame(Frame &F, Map *pMap, KeyFrameDatabase *pKFDB):
     mImuBias = F.mImuBias;
     SetPose(F.GetPose());
 
+    // Transfer triangulation data for dataset collection
+    mvTriangulatedPoints = F.mvTriangulatedPoints;
+    mvTriangulationValid = F.mvTriangulationValid;
+
     mnOriginMapId = pMap->GetId();
 }
 

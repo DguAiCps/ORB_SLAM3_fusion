@@ -27,6 +27,7 @@
 #include <tuple>
 
 #include "Converter.h"
+#include "DatasetCollector.h"
 #include "FrameDrawer.h"
 #include "G2oTypes.h"
 #include "GeometricTools.h"
@@ -2082,6 +2083,12 @@ void Tracking::Track() {
                 int nValidTriangulations = 0;
                 float fTriangulationError = 0.0f;
 
+                // Store triangulation results for dataset collection
+                mCurrentFrame.mvTriangulatedPoints.clear();
+                mCurrentFrame.mvTriangulatedPoints.resize(mCurrentFrame.N);
+                mCurrentFrame.mvTriangulationValid.clear();
+                mCurrentFrame.mvTriangulationValid.resize(mCurrentFrame.N, false);
+
                 // Find correspondences between current frame and last keyframe
                 for (int i = 0; i < mCurrentFrame.N; i++) {
                     MapPoint* pMP = mCurrentFrame.mvpMapPoints[i];
@@ -2124,6 +2131,9 @@ void Tracking::Track() {
                     Eigen::Vector3f x3D_triangulated;
                     if (GeometricTools::Triangulate(x_curr, x_kf, Tcw_curr,
                                                     Tcw_kf, x3D_triangulated)) {
+                        // Store triangulation result for dataset collection
+                        mCurrentFrame.mvTriangulatedPoints[curr_idx] = x3D_triangulated;
+
                         // Compare with RGB-D direct depth measurement
                         float depth_rgbd = mCurrentFrame.mvDepth[curr_idx];
                         if (depth_rgbd > 0) {
@@ -2136,6 +2146,9 @@ void Tracking::Track() {
                                     (x3D_triangulated - x3D_rgbd).norm();
                                 fTriangulationError += error;
                                 nValidTriangulations++;
+
+                                // Mark as valid triangulation for dataset collection
+                                mCurrentFrame.mvTriangulationValid[curr_idx] = true;
 
                                 // Optional: Log significant errors for analysis
                                 if (error > 0.1f) {  // 10cm threshold
@@ -2155,6 +2168,12 @@ void Tracking::Track() {
                     cout << "Triangulation pairs: " << vTriangulationPairs.size()
                          << ", Valid: " << nValidTriangulations
                          << ", Avg error: " << avgError << "m" << endl;
+                }
+
+                // Collect dataset for regular tracking frame
+                DatasetCollector& collector = DatasetCollector::GetInstance();
+                if (collector.IsEnabled()) {
+                    collector.CollectTrackingFrameData(&mCurrentFrame, mpLastKeyFrame);
                 }
             }
         } else if (mState == OK) {

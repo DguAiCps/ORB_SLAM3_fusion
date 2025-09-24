@@ -47,6 +47,10 @@ find_package(Eigen3 3.1.0 REQUIRED)
 find_package(Pangolin REQUIRED)
 find_package(realsense2)
 
+# Find JsonCpp for dataset collection
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(JSONCPP jsoncpp)
+
 include_directories(
 ${PROJECT_SOURCE_DIR}
 ${PROJECT_SOURCE_DIR}/include
@@ -87,6 +91,7 @@ src/GeometricTools.cc
 src/TwoViewReconstruction.cc
 src/Config.cc
 src/Settings.cc
+src/DatasetCollector.cc
 include/System.h
 include/Tracking.h
 include/LocalMapping.h
@@ -116,7 +121,8 @@ include/GeometricTools.h
 include/TwoViewReconstruction.h
 include/SerializationUtils.h
 include/Config.h
-include/Settings.h)
+include/Settings.h
+include/DatasetCollector.h)
 
 add_subdirectory(Thirdparty/g2o)
 
@@ -129,6 +135,19 @@ ${PROJECT_SOURCE_DIR}/Thirdparty/g2o/lib/libg2o.so
 -lboost_serialization
 -lcrypto
 )
+
+# Link JsonCpp if found
+if(JSONCPP_FOUND)
+    target_include_directories(${PROJECT_NAME} PRIVATE ${JSONCPP_INCLUDE_DIRS})
+    target_link_libraries(${PROJECT_NAME} ${JSONCPP_LIBRARIES})
+    # Also apply to examples
+    include_directories(${JSONCPP_INCLUDE_DIRS})
+else()
+    # Fallback to system jsoncpp
+    target_link_libraries(${PROJECT_NAME} -ljsoncpp)
+    # Add system jsoncpp include path
+    include_directories(/usr/include/jsoncpp)
+endif()
 
 # If RealSense SDK is found the library is added and its examples compiled
 if(realsense2_FOUND)
@@ -150,10 +169,18 @@ add_executable(rgbd_tum
         Examples/RGB-D/rgbd_tum.cc)
 target_link_libraries(rgbd_tum ${PROJECT_NAME})
 
+add_executable(dataset_collection_example
+        Examples/RGB-D/dataset_collection_example.cpp)
+target_link_libraries(dataset_collection_example ${PROJECT_NAME})
+
 if(realsense2_FOUND)
     add_executable(rgbd_realsense_D435i
             Examples/RGB-D/rgbd_realsense_D435i.cc)
     target_link_libraries(rgbd_realsense_D435i ${PROJECT_NAME})
+
+    add_executable(rgbd_realsense_dataset_collection
+            Examples/RGB-D/rgbd_realsense_dataset_collection.cpp)
+    target_link_libraries(rgbd_realsense_dataset_collection ${PROJECT_NAME})
 endif()
 
 

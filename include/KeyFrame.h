@@ -384,6 +384,10 @@ public:
     const std::vector<float> mvDepth; // negative value for monocular points
     const cv::Mat mDescriptors;
 
+    // Triangulation analysis results for dataset collection
+    std::vector<Eigen::Vector3f> mvTriangulatedPoints;
+    std::vector<bool> mvTriangulationValid;
+
     //BoW
     DBoW2::BowVector mBowVec;
     DBoW2::FeatureVector mFeatVec;

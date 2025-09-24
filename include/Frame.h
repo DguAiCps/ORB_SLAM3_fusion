@@ -234,6 +234,10 @@ public:
     std::vector<float> mvuRight;
     std::vector<float> mvDepth;
 
+    // Triangulation analysis results for dataset collection
+    std::vector<Eigen::Vector3f> mvTriangulatedPoints;
+    std::vector<bool> mvTriangulationValid;
+
     // Bag of Words Vector structures.
     DBoW2::BowVector mBowVec;
     DBoW2::FeatureVector mFeatVec;
