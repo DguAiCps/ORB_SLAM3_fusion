@@ -26,6 +26,8 @@
 
 #include<mutex>
 #include<chrono>
+#include<algorithm>
+#include<cmath>
 
 namespace ORB_SLAM3
 {
@@ -579,31 +581,60 @@ void LocalMapping::CreateNewMapPoints()
 
             bool goodProj = false;
             bool bPointStereo = false;
-            if(cosParallaxRays<cosParallaxStereo && cosParallaxRays>0 && (bStereo1 || bStereo2 ||
-                                                                          (cosParallaxRays<0.9996 && mbInertial) || (cosParallaxRays<0.9998 && !mbInertial)))
-            {
-                cout << "Triangulated points, ";
-                goodProj = GeometricTools::Triangulate(xn1, xn2, eigTcw1, eigTcw2, x3D);
-                if(!goodProj)
-                    continue;
+
+            // Weight-based fusion approach
+            Eigen::Vector3f x3D_tri, x3D_depth;
+            bool hasTriangulation = false, hasDepth = false;
+
+            // Always attempt triangulation if parallax is reasonable
+            if(cosParallaxRays > 0 && cosParallaxRays < 0.9998) {
+                hasTriangulation = GeometricTools::Triangulate(xn1, xn2, eigTcw1, eigTcw2, x3D_tri);
             }
-            else if(bStereo1 && cosParallaxStereo1<cosParallaxStereo2)
-            {
-                cout << "Used direct RGB-D sensor values from kf1, ";
-                countStereoAttempt++;
+
+            // Get depth measurement from best available keyframe
+            if(bStereo1 || bStereo2) {
+                if(bStereo1 && (!bStereo2 || cosParallaxStereo1 < cosParallaxStereo2)) {
+                    hasDepth = mpCurrentKeyFrame->UnprojectStereo(idx1, x3D_depth);
+                } else if(bStereo2) {
+                    hasDepth = pKF2->UnprojectStereo(idx2, x3D_depth);
+                }
+            }
+
+            // Apply fusion if we have both methods
+            if(hasTriangulation && hasDepth) {
+                // Prepare fusion data sample
+                FusionDataSample sample;
+                sample.parallax = acos(std::max(-1.0f, std::min(cosParallaxRays, 1.0f)));
+                sample.d_tri = (x3D_tri - Ow1).norm();
+                sample.d_raw = (x3D_depth - Ow1).norm();
+                sample.baseline = baseline;
+                sample.has_depth1 = bStereo1;
+                sample.has_depth2 = bStereo2;
+
+                // Calculate fusion weight
+                float fusion_weight = RuleBasedFusion(sample);
+
+                // Fuse the two estimates
+                x3D = FuseTriangulationAndDepth(x3D_tri, x3D_depth, fusion_weight);
+                goodProj = true;
+
+                cout << "Fused triangulation and depth (weight: " << fusion_weight << "), ";
+            }
+            // Fallback to single method
+            else if(hasTriangulation) {
+                x3D = x3D_tri;
+                goodProj = true;
+                cout << "Triangulated only, ";
+            }
+            else if(hasDepth) {
+                x3D = x3D_depth;
+                goodProj = true;
                 bPointStereo = true;
-                goodProj = mpCurrentKeyFrame->UnprojectStereo(idx1, x3D);
-            }
-            else if(bStereo2 && cosParallaxStereo2<cosParallaxStereo1)
-            {
-                cout << "Used direct RGB-D sensor values from kf2, ";
                 countStereoAttempt++;
-                bPointStereo = true;
-                goodProj = pKF2->UnprojectStereo(idx2, x3D);
+                cout << "Depth only, ";
             }
-            else
-            {
-                continue; //No stereo and very low parallax
+            else {
+                continue; // No valid estimation method available
             }
             
             if (goodProj) {
@@ -1525,6 +1556,41 @@ double LocalMapping::GetCurrKFTime()
 KeyFrame* LocalMapping::GetCurrKF()
 {
     return mpCurrentKeyFrame;
+}
+
+// Weight-based fusion implementation
+float LocalMapping::RuleBasedFusion(const FusionDataSample& sample) {
+    float tri_score = CalculateTriangulationScore(sample);
+    float depth_score = CalculateDepthScore(sample);
+    float weight = depth_score / (tri_score + depth_score + 1e-6f);
+    return std::max(0.1f, std::min(weight, 0.9f));
+}
+
+float LocalMapping::CalculateTriangulationScore(const FusionDataSample& sample) {
+    // Parallax score: higher parallax = better triangulation
+    float parallax_score = std::min(sample.parallax / (float(M_PI)/6.0f), 1.0f);
+    // Distance factor: closer points are more reliable for triangulation
+    float distance_factor = expf(-sample.d_tri / 10.0f);
+    // Baseline factor: longer baseline improves triangulation
+    float baseline_factor = std::min(sample.baseline / 0.5f, 1.0f);
+    return parallax_score * distance_factor * baseline_factor;
+}
+
+float LocalMapping::CalculateDepthScore(const FusionDataSample& sample) {
+    // Distance score: depth sensors more reliable at closer distances
+    float distance_score = expf(-sample.d_raw / 4.0f);
+    // Validity score: penalize invalid depth ranges
+    float validity_score = (sample.d_raw > 0.1f && sample.d_raw < 10.0f) ? 1.0f : 0.1f;
+    // Availability bonus: prefer when depth data available
+    float availability_bonus = (sample.has_depth1 || sample.has_depth2) ? 1.0f : 0.5f;
+    return distance_score * validity_score * availability_bonus;
+}
+
+Eigen::Vector3f LocalMapping::FuseTriangulationAndDepth(const Eigen::Vector3f& x3D_tri,
+                                                       const Eigen::Vector3f& x3D_depth,
+                                                       float weight) {
+    // Linear interpolation between triangulated and depth-based positions
+    return (1.0f - weight) * x3D_tri + weight * x3D_depth;
 }
 
 } //namespace ORB_SLAM

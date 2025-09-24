@@ -135,6 +135,23 @@ protected:
     void ProcessNewKeyFrame();
     void CreateNewMapPoints();
 
+    // Weight-based depth fusion structures and functions
+    struct FusionDataSample {
+        float parallax;        // Parallax angle between rays
+        float d_tri;          // Distance from triangulated point
+        float d_raw;          // Raw depth sensor measurement
+        float baseline;       // Baseline between keyframes
+        bool has_depth1;      // Keyframe 1 has depth data
+        bool has_depth2;      // Keyframe 2 has depth data
+    };
+
+    float RuleBasedFusion(const FusionDataSample& sample);
+    float CalculateTriangulationScore(const FusionDataSample& sample);
+    float CalculateDepthScore(const FusionDataSample& sample);
+    Eigen::Vector3f FuseTriangulationAndDepth(const Eigen::Vector3f& x3D_tri,
+                                              const Eigen::Vector3f& x3D_depth,
+                                              float weight);
+
     void MapPointCulling();
     void SearchInNeighbors();
     void KeyFrameCulling();
