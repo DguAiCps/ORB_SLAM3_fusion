@@ -2152,9 +2152,9 @@ void Tracking::Track() {
                 // Calculate average triangulation error
                 if (nValidTriangulations > 0) {
                     float avgError = fTriangulationError / nValidTriangulations;
-                    cout << "Triangulation pairs: " << vTriangulationPairs.size()
-                         << ", Valid: " << nValidTriangulations
-                         << ", Avg error: " << avgError << "m" << endl;
+                    // cout << "Triangulation pairs: " << vTriangulationPairs.size()
+                    //      << ", Valid: " << nValidTriangulations
+                    //      << ", Avg error: " << avgError << "m" << endl;
                 }
             }
         } else if (mState == OK) {

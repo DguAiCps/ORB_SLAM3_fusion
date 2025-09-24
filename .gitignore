@@ -91,3 +91,9 @@ my_settings.txt
 borrar/*
 
 */ExecMean.txt
+
+# Datasets
+realsense_dataset_output/
+
+# VSCode
+.vscode/

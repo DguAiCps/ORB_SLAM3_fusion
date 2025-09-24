@@ -582,18 +582,21 @@ void LocalMapping::CreateNewMapPoints()
             if(cosParallaxRays<cosParallaxStereo && cosParallaxRays>0 && (bStereo1 || bStereo2 ||
                                                                           (cosParallaxRays<0.9996 && mbInertial) || (cosParallaxRays<0.9998 && !mbInertial)))
             {
+                cout << "Triangulated points, ";
                 goodProj = GeometricTools::Triangulate(xn1, xn2, eigTcw1, eigTcw2, x3D);
                 if(!goodProj)
                     continue;
             }
             else if(bStereo1 && cosParallaxStereo1<cosParallaxStereo2)
             {
+                cout << "Used direct RGB-D sensor values from kf1, ";
                 countStereoAttempt++;
                 bPointStereo = true;
                 goodProj = mpCurrentKeyFrame->UnprojectStereo(idx1, x3D);
             }
             else if(bStereo2 && cosParallaxStereo2<cosParallaxStereo1)
             {
+                cout << "Used direct RGB-D sensor values from kf2, ";
                 countStereoAttempt++;
                 bPointStereo = true;
                 goodProj = pKF2->UnprojectStereo(idx2, x3D);
@@ -602,12 +605,17 @@ void LocalMapping::CreateNewMapPoints()
             {
                 continue; //No stereo and very low parallax
             }
+            
+            if (goodProj) {
+                if (bPointStereo) {
+                    countStereoGoodProj++;
+                }
 
-            if(goodProj && bPointStereo)
-                countStereoGoodProj++;
-
-            if(!goodProj)
+                // if GoodProj is true, we have a valid x3D
+                cout << "3D point: " << x3D.transpose() << endl;
+            } else {
                 continue;
+            }
 
             //Check triangulation in front of cameras
             float z1 = Rcw1.row(2).dot(x3D) + tcw1(2);

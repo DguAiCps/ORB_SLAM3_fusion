@@ -32,6 +32,7 @@
 #include <librealsense2/rs.hpp>
 #include <opencv2/core/core.hpp>
 #include <sstream>
+#include <thread>
 
 #include "librealsense2/rsutil.h"
 
@@ -227,7 +228,7 @@ int main(int argc, char** argv) {
             count_im_buffer++;
 
             double new_timestamp_image = fs.get_timestamp() * 1e-3;
-            if (abs(timestamp_image - new_timestamp_image) < 0.001) {
+            if (timestamp_image > 0 && abs(timestamp_image - new_timestamp_image) < 0.001) {
                 count_im_buffer--;
                 return;
             }
@@ -286,6 +287,29 @@ int main(int argc, char** argv) {
     };
 
     pipe_profile = pipe.start(cfg, imu_callback);
+
+    // Flush initial buffered frames to avoid "WAITING FOR IMAGES" issue
+    std::cout << "Flushing initial camera buffer..." << std::endl;
+
+    // Stop the callback temporarily to flush manually
+    pipe.stop();
+    pipe_profile = pipe.start(cfg);
+
+    // Flush 10-15 frames from the buffer
+    for(int i = 0; i < 15; i++) {
+        rs2::frameset frames;
+        if(pipe.try_wait_for_frames(&frames, 100)) {  // 100ms timeout per frame
+            std::cout << "Flushed frame " << i + 1 << std::endl;
+        } else {
+            break;  // No more frames in buffer
+        }
+    }
+
+    // Restart with callback
+    pipe.stop();
+    pipe_profile = pipe.start(cfg, imu_callback);
+
+    std::cout << "Buffer flushing complete. Starting SLAM..." << std::endl;
 
     rs2::stream_profile cam_stream = pipe_profile.get_stream(RS2_STREAM_COLOR);
 
