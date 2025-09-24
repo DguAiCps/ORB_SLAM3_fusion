@@ -28,6 +28,7 @@
 #include<chrono>
 #include<algorithm>
 #include<cmath>
+#include<iomanip>
 
 namespace ORB_SLAM3
 {
@@ -158,6 +159,46 @@ void LocalMapping::Run()
                     }
 
                 }
+
+                // // Update coordinate trackers with post-Local BA coordinates
+                // if(b_doneLBA) {
+                //     unique_lock<mutex> lock(mMutexCoordinateTrackers);
+                //     for(auto& tracker : mvCoordinateTrackers) {
+                //         if(tracker.mappoint_id != -1) {
+                //             // Find the MapPoint and update final coordinate
+                //             std::vector<MapPoint*> vpMPs = mpCurrentKeyFrame->GetMapPointMatches();
+                //             for(MapPoint* pMP : vpMPs) {
+                //                 if(pMP && pMP->mnId == tracker.mappoint_id && !pMP->isBad()) {
+                //                     Eigen::Vector3f pos = pMP->GetWorldPos().cast<float>();
+                //                     tracker.x3D_final = pos;
+                //                     break;
+                //                 }
+                //             }
+                //         }
+                //     }
+
+                //     // Print coordinate tracking results
+                //     PrintCoordinateTrackingResults();
+                // }
+                // Update coordinate trackers with post-Local BA coordinates (efficient)
+                if (b_doneLBA) {
+                    unique_lock<mutex> lock(mMutexCoordinateTrackers);
+                    for(auto& tracker : mvCoordinateTrackers) {
+                        // Use direct pointer access - much faster than ID lookup
+                        if(tracker.pMapPoint != nullptr && !tracker.pMapPoint->isBad()) {
+                            // Safe access: isBad() acts like weak_ptr check
+                            Eigen::Vector3f pos = tracker.pMapPoint->GetWorldPos().cast<float>();
+                            tracker.x3D_final = pos;
+                        } else {
+                            // MapPoint was deleted/marked bad - set zero coordinate
+                            tracker.x3D_final = Eigen::Vector3f::Zero();
+                        }
+                    }
+                    lock.unlock(); // Release lock before printing
+
+                    PrintCoordinateTrackingResults();
+                }
+
 #ifdef REGISTER_TIMES
                 std::chrono::steady_clock::time_point time_EndLBA = std::chrono::steady_clock::now();
 
@@ -618,6 +659,21 @@ void LocalMapping::CreateNewMapPoints()
                 x3D = FuseTriangulationAndDepth(x3D_tri, x3D_depth, fusion_weight);
                 goodProj = true;
 
+                // Store coordinate tracking data
+                CoordinateTracker tracker;
+                tracker.x3D_triangulated = x3D_tri;
+                tracker.x3D_depth = x3D_depth;
+                tracker.x3D_fused = x3D;
+                tracker.fusion_data = sample;
+                tracker.fusion_weight = fusion_weight;
+                tracker.timestamp = mpCurrentKeyFrame->mTimeStamp;
+
+                // Add to tracking list (will get MapPoint ID later)
+                {
+                    unique_lock<mutex> lock(mMutexCoordinateTrackers);
+                    mvCoordinateTrackers.push_back(tracker);
+                }
+
                 cout << "Fused triangulation and depth (weight: " << fusion_weight << "), ";
             }
             // Fallback to single method
@@ -733,6 +789,16 @@ void LocalMapping::CreateNewMapPoints()
             MapPoint* pMP = new MapPoint(x3D, mpCurrentKeyFrame, mpAtlas->GetCurrentMap());
             if (bPointStereo)
                 countStereo++;
+
+            // Update coordinate tracker with MapPoint reference (if we have tracking data)
+            {
+                unique_lock<mutex> lock(mMutexCoordinateTrackers);
+                if(!mvCoordinateTrackers.empty() && mvCoordinateTrackers.back().pMapPoint == nullptr &&
+                   mvCoordinateTrackers.back().timestamp == mpCurrentKeyFrame->mTimeStamp) {
+                    mvCoordinateTrackers.back().pMapPoint = pMP;
+                    mvCoordinateTrackers.back().mappoint_id = pMP->mnId;
+                }
+            }
             
             pMP->AddObservation(mpCurrentKeyFrame,idx1);
             pMP->AddObservation(pKF2,idx2);
@@ -1591,6 +1657,55 @@ Eigen::Vector3f LocalMapping::FuseTriangulationAndDepth(const Eigen::Vector3f& x
                                                        float weight) {
     // Linear interpolation between triangulated and depth-based positions
     return (1.0f - weight) * x3D_tri + weight * x3D_depth;
+}
+
+void LocalMapping::PrintCoordinateTrackingResults() {
+    unique_lock<mutex> lock(mMutexCoordinateTrackers);
+
+    if(mvCoordinateTrackers.empty()) {
+        cout << "\n[CoordinateTracker] No fusion data available." << endl;
+        return;
+    }
+
+    cout << "\n========== COORDINATE TRACKING RESULTS ==========" << endl;
+    cout << "Total tracked points: " << mvCoordinateTrackers.size() << endl;
+
+    for(const auto& tracker : mvCoordinateTrackers) {
+        cout << "\n--- MapPoint ID: " << tracker.mappoint_id << " ---" << endl;
+        cout << "Timestamp: " << fixed << setprecision(6) << tracker.timestamp << endl;
+
+        // Fusion parameters
+        cout << "Fusion Parameters:" << endl;
+        cout << "  Parallax: " << tracker.fusion_data.parallax * 180.0f / M_PI << " degrees" << endl;
+        cout << "  Baseline: " << tracker.fusion_data.baseline << " m" << endl;
+        cout << "  Tri distance: " << tracker.fusion_data.d_tri << " m" << endl;
+        cout << "  Depth distance: " << tracker.fusion_data.d_raw << " m" << endl;
+        cout << "  Weight (towards depth): " << tracker.fusion_weight << endl;
+
+        // Coordinates
+        cout << "Coordinates:" << endl;
+        cout << "  Triangulated: [" << tracker.x3D_triangulated.transpose() << "]" << endl;
+        cout << "  Depth sensor: [" << tracker.x3D_depth.transpose() << "]" << endl;
+        cout << "  Fused result: [" << tracker.x3D_fused.transpose() << "]" << endl;
+        cout << "  After Local BA: [" << tracker.x3D_final.transpose() << "]" << endl;
+
+        // Error analysis
+        float tri_depth_error = (tracker.x3D_triangulated - tracker.x3D_depth).norm();
+        float fused_tri_error = (tracker.x3D_fused - tracker.x3D_triangulated).norm();
+        float fused_depth_error = (tracker.x3D_fused - tracker.x3D_depth).norm();
+        float ba_fused_error = (tracker.x3D_final - tracker.x3D_fused).norm();
+
+        cout << "Error Analysis:" << endl;
+        cout << "  Tri vs Depth: " << tri_depth_error << " m" << endl;
+        cout << "  Fused vs Tri: " << fused_tri_error << " m" << endl;
+        cout << "  Fused vs Depth: " << fused_depth_error << " m" << endl;
+        cout << "  Local BA adjustment: " << ba_fused_error << " m" << endl;
+    }
+
+    cout << "=================================================" << endl;
+
+    // Clear processed trackers
+    mvCoordinateTrackers.clear();
 }
 
 } //namespace ORB_SLAM

@@ -145,12 +145,30 @@ protected:
         bool has_depth2;      // Keyframe 2 has depth data
     };
 
+    // Coordinate tracking for visualization
+    struct CoordinateTracker {
+        Eigen::Vector3f x3D_triangulated;    // Pure triangulated coordinate
+        Eigen::Vector3f x3D_depth;           // Raw depth sensor coordinate
+        Eigen::Vector3f x3D_fused;           // Fusion result coordinate
+        Eigen::Vector3f x3D_final;           // Final coordinate after Local BA
+        FusionDataSample fusion_data;        // Complete fusion parameters
+        float fusion_weight;                 // Weight used in fusion
+        MapPoint* pMapPoint;                 // Direct pointer (safer than ID lookup)
+        int mappoint_id;                     // MapPoint ID for logging
+        double timestamp;                    // Creation timestamp
+
+        CoordinateTracker() : fusion_weight(0.0f), pMapPoint(nullptr), mappoint_id(-1), timestamp(0.0) {}
+    };
+
     float RuleBasedFusion(const FusionDataSample& sample);
     float CalculateTriangulationScore(const FusionDataSample& sample);
     float CalculateDepthScore(const FusionDataSample& sample);
     Eigen::Vector3f FuseTriangulationAndDepth(const Eigen::Vector3f& x3D_tri,
                                               const Eigen::Vector3f& x3D_depth,
                                               float weight);
+
+    // Coordinate tracking functions
+    void PrintCoordinateTrackingResults();
 
     void MapPointCulling();
     void SearchInNeighbors();
@@ -208,6 +226,10 @@ protected:
     float mTinit;
 
     int countRefinement;
+
+    // Coordinate tracking for visualization
+    std::vector<CoordinateTracker> mvCoordinateTrackers;
+    std::mutex mMutexCoordinateTrackers;
 
     //DEBUG
     ofstream f_lm;
