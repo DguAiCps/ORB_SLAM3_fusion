@@ -29,6 +29,12 @@
 #include<algorithm>
 #include<cmath>
 #include<iomanip>
+#include<fstream>
+#include<iostream>
+#include<sstream>
+#include<ctime>
+#include<sys/stat.h>
+#include<sys/types.h>
 
 namespace ORB_SLAM3
 {
@@ -196,7 +202,27 @@ void LocalMapping::Run()
                     }
                     lock.unlock(); // Release lock before printing
 
-                    PrintCoordinateTrackingResults();
+                    // Create dataset_output directory if it doesn't exist
+                    string output_dir = "dataset_output";
+                    struct stat info;
+                    if (stat(output_dir.c_str(), &info) != 0) {
+                        // Directory doesn't exist, create it
+                        if (mkdir(output_dir.c_str(), 0755) != 0) {
+                            cerr << "[Dataset Export] Warning: Could not create directory " << output_dir << endl;
+                            output_dir = "."; // Fallback to current directory
+                        }
+                    }
+
+                    // Generate timestamped filename for dataset export
+                    auto now = chrono::system_clock::now();
+                    auto time_t = chrono::system_clock::to_time_t(now);
+                    auto ms = chrono::duration_cast<chrono::milliseconds>(now.time_since_epoch()) % 1000;
+
+                    stringstream ss;
+                    ss << output_dir << "/fusion_dataset_" << put_time(localtime(&time_t), "%Y%m%d_%H%M%S")
+                       << "_" << setfill('0') << setw(3) << ms.count() << ".json";
+
+                    ExportCoordinateTrackingDatasetJSON(ss.str());
                 }
 
 #ifdef REGISTER_TIMES
@@ -1703,6 +1729,125 @@ void LocalMapping::PrintCoordinateTrackingResults() {
     }
 
     cout << "=================================================" << endl;
+
+    // Clear processed trackers
+    mvCoordinateTrackers.clear();
+}
+
+void LocalMapping::ExportCoordinateTrackingDatasetJSON(const std::string& filename) {
+    unique_lock<mutex> lock(mMutexCoordinateTrackers);
+
+    if(mvCoordinateTrackers.empty()) {
+        cout << "[Dataset Export] No fusion data available for export." << endl;
+        return;
+    }
+
+    // Ensure directory exists
+    size_t last_slash = filename.find_last_of('/');
+    if (last_slash != string::npos) {
+        string dir_path = filename.substr(0, last_slash);
+        struct stat info;
+        if (stat(dir_path.c_str(), &info) != 0) {
+            if (mkdir(dir_path.c_str(), 0755) != 0) {
+                cerr << "[Dataset Export] Warning: Could not create directory " << dir_path << endl;
+            }
+        }
+    }
+
+    ofstream json_file(filename);
+    if (!json_file.is_open()) {
+        cerr << "[Dataset Export] Error: Could not open file " << filename << " for writing." << endl;
+        return;
+    }
+
+    json_file << "{\n";
+    json_file << "  \"metadata\": {\n";
+    json_file << "    \"export_timestamp\": " << fixed << setprecision(6) <<
+                 chrono::duration<double>(chrono::steady_clock::now().time_since_epoch()).count() << ",\n";
+    json_file << "    \"total_points\": " << mvCoordinateTrackers.size() << ",\n";
+
+    // Count valid points (excluding [0,0,0] x3D_final)
+    int valid_count = 0;
+    for(const auto& tracker : mvCoordinateTrackers) {
+        if(tracker.x3D_final.norm() > 1e-6) { // Not [0,0,0]
+            valid_count++;
+        }
+    }
+    json_file << "    \"valid_points\": " << valid_count << "\n";
+    json_file << "  },\n";
+
+    json_file << "  \"dataset\": [\n";
+
+    bool first_entry = true;
+    for(const auto& tracker : mvCoordinateTrackers) {
+        // Skip invalid data where x3D_final is [0,0,0]
+        if(tracker.x3D_final.norm() <= 1e-6) {
+            continue;
+        }
+
+        if(!first_entry) {
+            json_file << ",\n";
+        }
+        first_entry = false;
+
+        json_file << "    {\n";
+        json_file << "      \"mappoint_id\": " << tracker.mappoint_id << ",\n";
+        json_file << "      \"timestamp\": " << fixed << setprecision(6) << tracker.timestamp << ",\n";
+
+        // Fusion parameters
+        json_file << "      \"fusion_parameters\": {\n";
+        json_file << "        \"parallax_degrees\": " << fixed << setprecision(4) <<
+                     (tracker.fusion_data.parallax * 180.0f / M_PI) << ",\n";
+        json_file << "        \"baseline_m\": " << fixed << setprecision(6) << tracker.fusion_data.baseline << ",\n";
+        json_file << "        \"triangulation_distance_m\": " << fixed << setprecision(6) << tracker.fusion_data.d_tri << ",\n";
+        json_file << "        \"depth_distance_m\": " << fixed << setprecision(6) << tracker.fusion_data.d_raw << ",\n";
+        json_file << "        \"fusion_weight\": " << fixed << setprecision(4) << tracker.fusion_weight << ",\n";
+        json_file << "        \"has_depth1\": " << (tracker.fusion_data.has_depth1 ? "true" : "false") << ",\n";
+        json_file << "        \"has_depth2\": " << (tracker.fusion_data.has_depth2 ? "true" : "false") << "\n";
+        json_file << "      },\n";
+
+        // 3D coordinates
+        json_file << "      \"coordinates\": {\n";
+        json_file << "        \"triangulated\": [" << fixed << setprecision(6) <<
+                     tracker.x3D_triangulated.x() << ", " <<
+                     tracker.x3D_triangulated.y() << ", " <<
+                     tracker.x3D_triangulated.z() << "],\n";
+        json_file << "        \"depth_sensor\": [" << fixed << setprecision(6) <<
+                     tracker.x3D_depth.x() << ", " <<
+                     tracker.x3D_depth.y() << ", " <<
+                     tracker.x3D_depth.z() << "],\n";
+        json_file << "        \"fused\": [" << fixed << setprecision(6) <<
+                     tracker.x3D_fused.x() << ", " <<
+                     tracker.x3D_fused.y() << ", " <<
+                     tracker.x3D_fused.z() << "],\n";
+        json_file << "        \"final_after_ba\": [" << fixed << setprecision(6) <<
+                     tracker.x3D_final.x() << ", " <<
+                     tracker.x3D_final.y() << ", " <<
+                     tracker.x3D_final.z() << "]\n";
+        json_file << "      },\n";
+
+        // Error analysis
+        float tri_depth_error = (tracker.x3D_triangulated - tracker.x3D_depth).norm();
+        float fused_tri_error = (tracker.x3D_fused - tracker.x3D_triangulated).norm();
+        float fused_depth_error = (tracker.x3D_fused - tracker.x3D_depth).norm();
+        float ba_fused_error = (tracker.x3D_final - tracker.x3D_fused).norm();
+
+        json_file << "      \"error_analysis\": {\n";
+        json_file << "        \"triangulated_vs_depth_m\": " << fixed << setprecision(6) << tri_depth_error << ",\n";
+        json_file << "        \"fused_vs_triangulated_m\": " << fixed << setprecision(6) << fused_tri_error << ",\n";
+        json_file << "        \"fused_vs_depth_m\": " << fixed << setprecision(6) << fused_depth_error << ",\n";
+        json_file << "        \"ba_adjustment_m\": " << fixed << setprecision(6) << ba_fused_error << "\n";
+        json_file << "      }\n";
+        json_file << "    }";
+    }
+
+    json_file << "\n  ]\n";
+    json_file << "}\n";
+
+    json_file.close();
+
+    cout << "[Dataset Export] Successfully exported " << valid_count << " valid coordinate tracking samples to " << filename << endl;
+    cout << "[Dataset Export] Excluded " << (mvCoordinateTrackers.size() - valid_count) << " invalid samples with [0,0,0] final coordinates" << endl;
 
     // Clear processed trackers
     mvCoordinateTrackers.clear();

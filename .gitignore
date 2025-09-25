@@ -94,6 +94,7 @@ borrar/*
 
 # Datasets
 realsense_dataset_output/
+dataset_output/
 
 # VSCode
 .vscode/

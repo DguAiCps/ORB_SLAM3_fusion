@@ -169,6 +169,7 @@ protected:
 
     // Coordinate tracking functions
     void PrintCoordinateTrackingResults();
+    void ExportCoordinateTrackingDatasetJSON(const std::string& filename);
 
     void MapPointCulling();
     void SearchInNeighbors();
